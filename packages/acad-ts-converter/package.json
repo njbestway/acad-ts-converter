@@ -1,0 +1,62 @@
+{
+  "name": "@njbestway/acad-ts-converter",
+  "version": "0.1.0",
+  "description": "DWG converter that maps an acad-ts CadDocument into the @mlightcad/data-model AcDbDatabase — pure TypeScript, no WASM and no worker",
+  "license": "MIT",
+  "type": "module",
+  "author": "njbestway",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/njbestway/acad-ts-converter.git",
+    "directory": "packages/acad-ts-converter"
+  },
+  "bugs": {
+    "url": "https://github.com/njbestway/acad-ts-converter/issues"
+  },
+  "homepage": "https://github.com/njbestway/acad-ts-converter#readme",
+  "keywords": [
+    "autocad",
+    "dwg",
+    "cad",
+    "converter",
+    "acad-ts",
+    "mlightcad",
+    "data-model"
+  ],
+  "publishConfig": {
+    "access": "public"
+  },
+  "main": "./lib/index.js",
+  "module": "./lib/index.js",
+  "types": "./lib/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./lib/index.d.ts",
+      "import": "./lib/index.js"
+    }
+  },
+  "files": [
+    "lib",
+    "README.md",
+    "package.json"
+  ],
+  "sideEffects": false,
+  "engines": {
+    "node": ">=18"
+  },
+  "scripts": {
+    "clean": "rimraf lib tsconfig.tsbuildinfo",
+    "build": "tsc"
+  },
+  "dependencies": {
+    "@node-projects/acad-ts": "link:../../../acad-ts"
+  },
+  "devDependencies": {
+    "@mlightcad/data-model": "1.15.14",
+    "rimraf": "^6.0.1",
+    "typescript": "^5.9.3"
+  },
+  "peerDependencies": {
+    "@mlightcad/data-model": "^1.15.14"
+  }
+}
