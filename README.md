@@ -4,6 +4,7 @@ DWG parser plugin for [@mlightcad/data-model](https://www.npmjs.com/package/@mli
 
 - **Library**: [`packages/acad-ts-converter`](packages/acad-ts-converter) → `@njbestway/acad-ts-converter`
 - **Example app**: [`examples/cad-viewer-example`](examples/cad-viewer-example) — registers the converter as the default DWG parser for the `@mlightcad/cad-viewer` UI.
+- **Handoff / maintainer notes**: [`HANDOFF.md`](HANDOFF.md) — read this first when continuing work on this repo.
 
 ## Why pure TypeScript
 
@@ -18,7 +19,7 @@ packages/acad-ts-converter/   the published library (@njbestway/acad-ts-converte
 examples/cad-viewer-example/  Vite demo app wiring it into @mlightcad/cad-viewer
 ```
 
-> Local development note: `@node-projects/acad-ts` is wired via a `link:` dependency to a sibling checkout of the acad-ts fork during development. Before publishing, that dependency must be switched to a registry version (see README of the package).
+> `@node-projects/acad-ts` is consumed as a published registry dependency, pinned to `3.6.0` (exact pin; the converter is verified end-to-end against it via a vitest regression suite plus the example smoke baseline). To get the detail infos — see the [package README](packages/acad-ts-converter/README.md) and [`HANDOFF.md`](HANDOFF.md).
 
 ## Usage
 
@@ -45,6 +46,7 @@ AcDbDatabaseConverterManager.instance.register(AcDbFileType.DWG, converter)
 ```bash
 pnpm install
 pnpm build          # compile the library to lib/
+pnpm --filter @njbestway/acad-ts-converter test   # vitest regression (builds lib first)
 pnpm dev            # serve examples/cad-viewer-example
 ```
 

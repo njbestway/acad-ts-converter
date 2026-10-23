@@ -28,9 +28,11 @@ await converter.read(dwgArrayBuffer, db)
 
 Mapping runs with chunked UI yielding (roughly 50 ms slices), so the main thread stays responsive while large drawings map; decoding itself is a single synchronous acad-ts pass — budget it for your UX (see the example app's benchmark output for real numbers).
 
-## Publishing note
+## Dependencies
 
-`@node-projects/acad-ts` is wired as a `link:` dependency to a sibling acad-ts checkout for local development. Before `npm publish`, replace it with a registry version (e.g. `^3.3.0`) and verify parity against the linked fork — the fork is synced commit-by-commit with upstream, but confirm no local-only fixes are relied upon.
+The parser is the published [`@node-projects/acad-ts`](https://www.npmjs.com/package/@node-projects/acad-ts) (MIT), pinned to `3.3.0` — the version this converter was developed and end-to-end verified against. `@mlightcad/data-model` is a peer dependency (`^1.15.14`), so the database object graph stays a single instance shared with your host app; install it yourself.
+
+> `@node-projects/acad-ts` has moved on to `3.6.0` upstream. It is not tracked here because the intervening minors were not validated against this mapper; bump deliberately and re-run the example benchmark before relying on a newer parser.
 
 ## License
 

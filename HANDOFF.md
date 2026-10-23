@@ -1,0 +1,185 @@
+# HANDOFF — @njbestway/acad-ts-converter
+
+> 面向**在 `acad-ts-converter` 自己仓库目录里新开的 session**。读完这份即可独立接手迭代，无需回到 cad-viewer monorepo。
+> 本仓库是从 `e:\rustpro\cad-viewer` 的 `packages/acad-ts-converter` 拆分出来的独立 pnpm workspace。迁移已闭环，是一个干净的起点。
+
+---
+
+## 0. 立即可做的事（环境说明）
+
+- 当你把本目录（`E:\rustpro\acad-ts-converter`）作为工作区打开时，**文件读写 / 编辑工具对它全部可用**——不像拆分前那样受"只能写 cad-viewer 工作区"的限制。之前用 `.tmp-stepN` 暂存 + `Copy-Item` 绕过，只是为了跨仓库写入；本仓库内可直接编辑。
+- Shell 仍是 Windows PowerShell 5.1：**不支持 `&&`**，用 `;`；嵌套引号 / `$_` / 复杂管道容易报错，尽量把逻辑拆简单或写进脚本文件。
+- 工具链固定：`packageManager: pnpm@10.33.4`，Node `>=18`。用 corepack 对齐：`corepack enable && corepack prepare pnpm@10.33.4 --activate`。
+
+---
+
+## 1. 这个包是什么
+
+一个 **DWG → `@mlightcad/data-model` `AcDbDatabase` 的转换器**，纯 TypeScript、跑在调用线程、**无 WASM / 无 worker / 无原生工具链**。底层解析器是 [`@node-projects/acad-ts`](https://github.com/node-projects/acad-ts)（MIT，C# ACadSharp 的 TS 移植，DWG R14–R2018+ 读写）。
+
+定位（继承自 cad-viewer 的技术路线裁决）：
+- **acad-rust（wasm）是核心 DWG 引擎**，性能与 GIS 同引擎一致性都更强。
+- **acad-ts 是本仓库这条"纯 JS 备选"路线**——最简部署（单 JS bundle）、适合小图 / Node CLI / 无法加载 wasm 的环境。**不追求大图性能**。
+- 接入方式永远是宿主侧调用 `registerAcadTsConverter()` 覆盖 `AcDbDatabaseConverterManager` 的 DWG 槽位（**last-writer-wins**），与本包无耦合，是公开 slot API。
+
+---
+
+## 2. 仓库结构
+
+```
+acad-ts-converter/                     根：private workspace，成员由 pnpm-workspace.yaml 发现
+├─ pnpm-workspace.yaml                 packages/* + examples/*
+├─ package.json                        根脚本：build(-r) / clean(-r) / dev(=example)
+├─ tsconfig.base.json                  所有包的编译基配置（es5 target、declaration、strict…）
+├─ .npmrc                              @njbestway/@mlightcad/@node-projects → registry.npmjs.org（防镜像劫持 publish）
+├─ .pnpmrc                             strict-peer / auto-install-peers / link-workspace-packages=true
+├─ LICENSE                             MIT (c) 2026 njbestway
+├─ README.md                           仓库门面
+├─ packages/acad-ts-converter/         ★ 要发布的库包
+│  ├─ package.json                     @njbestway/acad-ts-converter@0.1.0
+│  ├─ tsconfig.json                    extends ../../tsconfig.base.json；outDir=lib
+│  ├─ README.md                        随 npm 发布的包级文档
+│  └─ src/
+│     ├─ AcDbAcadTsConverter.ts        ★ 映射主体（~1040 行），含 workingDatabase 修复
+│     ├─ registerAcadTsConverter.ts    一行注册便捷函数
+│     └─ index.ts                      导出面：AcDbAcadTsConverter + registerAcadTsConverter
+└─ examples/cad-viewer-example/        ★ 消费者等价性验证：npm 官方全家桶 + 本包
+   ├─ package.json                     6 个 @mlightcad 1.7.6 包装配（见 §5 陷阱）
+   ├─ vite.config.ts / tsconfig.json / index.html
+   └─ src/{main.ts, App.vue, env.d.ts} main.ts 里 mount 前 registerAcadTsConverter()
+```
+
+---
+
+## 3. 公开 API（改动前务必对齐真实签名）
+
+```ts
+// 便捷注册（覆盖 DWG 槽位）
+import { registerAcadTsConverter } from '@njbestway/acad-ts-converter'
+registerAcadTsConverter()
+
+// 显式驱动
+import { AcDbAcadTsConverter } from '@njbestway/acad-ts-converter'
+import { AcDbDatabase } from '@mlightcad/data-model'
+
+const converter = new AcDbAcadTsConverter({ useWorker: false })   // 构造参数见基类
+const db = new AcDbDatabase()
+await converter.read(dwgArrayBuffer, db, { progress })            // ★ 真实方法是 read()，不是 convert()
+// 映射结果直接落在传入的 db 上：db.tables / modelSpace 实体
+```
+
+- **方法名是 `read(data: ArrayBuffer, db: AcDbDatabase, options?)`**（继承 `AcDbDatabaseConverter`）。README 早期曾误写 `convert()`，已修正——再改文档时以 `AcDbAcadTsConverter.ts` 源码为准。
+- `options.progress` 类型 `AcDbConversionProgressCallback` **要求返回 `Promise<void>`**：回调必须写成 `async (…) => {}`，否则 `vue-tsc/tsc` 报 TS2322（example 的 App.vue 就是这么修的）。
+- 进度分阶段回调：`PARSE / LAYER / LTYPE / STYLE / BLOCK_RECORD / ENTITY / BLOCK`，`data` 里带 `unknownEntityCount`（未映射实体类型计数）——benchmark 面板靠它拆分 decode vs map。
+
+---
+
+## 4. 依赖模型（关键决策，勿轻易改）
+
+| 依赖 | 形态 | 值 | 原因 |
+|---|---|---|---|
+| `@node-projects/acad-ts` | dependency | **`3.6.0`（registry 精确 pin）** | 2026-10-23 从 3.3.0 升到 3.6.0，经 tsc + vue-tsc + vite build + §6 冒烟计数 + vitest 回归五重验证通过（详见下方"关于版本"）。仍保持精确 pin、不用 `^`。本地 fork `E:\rustpro\acad-ts` 无 `link:` 依赖，junction 指向 pnpm store |
+| `@mlightcad/data-model` | **peer** | `^1.15.14` | 数据库对象图必须与宿主共享单实例，**绝不能打进包**（否则出现两个 `AcDbDatabase` 类，instanceof / 注册表全崩） |
+| `@mlightcad/data-model` | devDep | `1.15.14` | 本地类型检查/构建用 |
+
+**关于版本**：2026-10-23 已把本仓库从 `3.3.0` 升到 `3.6.0`（跨 3.4/3.5/3.6 三个 minor）。升级门禁全过：库 `tsc` exit 0、example `vue-tsc --noEmit && vite build` exit 0、§6 两张语料计数与 3.3.0 完全一致（baseline 160/6、map-of-uae 129/0）、`pnpm test`（vitest 回归）全绿——即 `CadDocument` 对象模型 API 在 3.3.0→3.6.0 对本 mapper 无破坏。**未来再升版沿用同一纪律**：改精确 pin → `pnpm build`（tsc）→ `pnpm --filter cad-viewer-example build`（vite）→ 跑 §6 冒烟计数 + `pnpm test`，逐类核对映射是否受影响，别盲跳 latest。
+
+---
+
+## 5. 工程陷阱与已修的坑（改动时守住）
+
+1. **★ workingDatabase 自绑定（本包的核心修复，别删）**
+   `AcDbAcadTsConverter.read()` 的**映射阶段**被 `withWorkingDatabase()` 用 try/finally 包住：先把 `db` 绑到 `acdbHostApplicationServices().workingDatabase`，结束恢复原值。
+   - 根因：`AcDbHatch` 等实体构造会读工作库（`getEffectivePatternName`），其 getter 在未绑定时抛 `The current working database must be set before using it!`。宿主 viewer 会预绑定，**独立/无头调用不会**——所以脱离 viewer 单独 `new AcDbDatabase()+read()` 必炸（含 Hatch 的图纸）。
+   - 写法参照上游 `cad-html-exporter` 的 `withWorkingDatabase.ts`：前值从私有 backing field `_workingDatabase` 取（公开 getter 未设时抛错，不能用来取值），恢复时也写 backing field。
+   - 验证过：修复后冷启动直接 bench baseline-sample.dwg（含 19 个 Hatch）通过。
+
+2. **★ example 里 @mlightcad 的"可选 peer"其实不可选**
+   `@mlightcad/cad-viewer@1.7.6` 的 bundle 对 `cad-html-plugin`/`cad-pdf-plugin`/`cad-svg-plugin`/`cad-simple-viewer`/`cad-agent-plugin` 是**顶层静态 import**（dev 预打包里 `cad-agent-plugin/style.css` 也被提升），虽在 `peerDependenciesMeta` 标了 optional。少装任一 → `vite build` 报 `"registerLazyPdfPlugin" is not exported…` 或 dev 首屏 500 `Failed to resolve import "__vite-optional-peer-dep:…"`。
+   - 对策：example 把 **6 个包全 pin `1.7.6`** 装上（纯装配用途，example 本身不用这些功能）。`cad-onedrive-plugin`/`cad-google-drive-plugin` 确为运行时懒加载（`&& import(...)` 门控），可不装。
+
+3. **两条 peer 警告可安全忽略**：`unmet peer three@>=0.185.1 found 0.172.0`（已核实 `mtext-renderer@0.13.5` 只用 `ShapePath/BufferGeometry/Float32BufferAttribute`，0.172 全有）、`@vueuse/core@^11.1.0 found 15.0.0`——官方发布组合本身带这俩，不影响。
+
+4. **rollup 循环 chunk 警告**（`pdf-renderer ↔ geometry-engine`）是上游包内部问题，构建仍成功，非本包引入。
+
+5. **若将来把本仓库重新 link 进某个 monorepo**：小心 `overrides` 会覆盖 `workspace:*`/`link:` 协议，把本地包强制解析成 registry 版本（拆分前在 cad-viewer 里踩过：mtext-parser/renderer 的 override 会断掉 fork 链接）。
+
+6. **发布产物白名单**：`package.json` 的 `files: ["lib","README.md","LICENSE","package.json"]`——只发编译产物，`src/` 不入库发布。`publishConfig.access: public`（scoped 包必需）。
+
+---
+
+## 6. 已验证的冒烟基线（改动后拿这两张图回归）
+
+dev 里上传 `.dwg` → **Bench parse** 按钮会打表：decode（acad-ts 同步解码）/ map（分片映射）/ total / model-space 实体数 / unmapped 数。
+
+**这三行的实体/unmapped 计数现已被 `packages/acad-ts-converter/test/` 的 vitest 回归用例锁定**（`read()` 端到端断言 baseline 160/6、map-of-uae 129/0）；下表数字在 acad-ts **3.3.0 与 3.6.0 上实测一致**（3.6.0 见 §4 升级记录）。计时有抖动，仅供量级参考。
+
+| 语料 | decode | map | total | entities | unmapped |
+|---|---|---|---|---|---|
+| baseline-sample.dwg（80 KB，含 Hatch） | ~73 ms | ~17 ms | ~89 ms | 160 | 6 |
+| map-of-uae.dwg（195 KB，库内 fixtures） | ~40–55 ms | ~24–31 ms | ~61–86 ms | 129 | 0 |
+| gaoshan.dwg（15.8 MB） | ~8767 ms | ~2317 ms | ~11084 ms | 2198 | 248 |
+
+- map-of-uae 行是 P0 自带 fixtures 时新测的（2026-10-23，浏览器 Bench parse 跑 3 次；实体/unmapped 恒定 129/0，计时抖动大 → 记区间，首跑冷 ~55/31/86，预热 ~40/24/64）。它 unmapped=0，是"映射广度不回归"的正向哨兵。
+
+- gaoshan 的 `decode≈8.8s` 单同步长任务正是"acad-ts 不适合大图"的实测注脚——迭代时别为追这个去改架构，那是 acad-rust 的赛道。
+- 小语料已自带进仓库：`packages/acad-ts-converter/test/fixtures/{baseline-sample,map-of-uae}.dwg`（库的单测/回归真相源，见该目录 README）。大图（gaoshan / talahao / canteen / sanigou 等）仍留在 `e:\rustpro\cad-viewer\caddata\data\*.dwg`，跨仓库引用前先确认文件还在；需要长期跑大图回归再议 git-lfs，别把十几 MB 塞进普通提交。
+
+---
+
+## 7. 当前 git 状态 & 待办（拆分侧）
+
+**提交纪律**：本仓库历史上都是**用户自行 `git commit`**，AI 只 `git add` 暂存。已有提交：
+- `61f9b76` chore: scaffold pnpm workspace
+- `2e85e19` feat: migrate acad-ts-converter package（库包骨架）
+- `a21b3ac` Initial commit（GitHub 远程初始化）
+
+**已暂存待提交（12 项，本次交接前 `git add -A` 的结果）**：
+```
+A  examples/cad-viewer-example/  ×8（整个 example app）
+M  packages/acad-ts-converter/README.md            （撤掉过时 link 说明）
+M  packages/acad-ts-converter/package.json         （acad-ts link → 3.3.0）
+M  packages/acad-ts-converter/src/AcDbAcadTsConverter.ts （workingDatabase 修复）
+M  pnpm-lock.yaml                                   （registry 解析）
+```
+> 建议提交语：`feat: add cad-viewer-example + workingDatabase fix; switch acad-ts dep to registry 3.3.0`。
+> 注：交接时我又改了根 `README.md`（撤掉过时 `link:` 段）并加了本 `HANDOFF.md`——这两项也需一并 `git add`（见 §8）。
+
+**发布前置**：
+1. npm 上先建 `@njbestway` scope（组织/个人均可，public 包免费）。
+2. 发布前 `pnpm pack --dry-run`（或 `pnpm pack` 解包核对 `lib/` 齐全、`files` 白名单不含 src）。
+3. `pnpm --filter @njbestway/acad-ts-converter publish`（`.npmrc` 已把 `@njbestway` 钉到官方 registry，防镜像劫持）。
+4. **本地 fork `E:\rustpro\acad-ts` 现在可以删除**——本仓库已无任何 `link:` 指向它。
+
+---
+
+## 8. 后续迭代路线（在新 session 里按优先级推进）
+
+**P0 收尾**
+- [ ] 提交 §7 的暂存项 + 本 HANDOFF.md + 修正后的 README.md。
+- [ ] （可选）发第一个 npm 版本 `0.1.0`，跑通 §7 发布前置。
+- [x] 自带 fixtures：`baseline-sample.dwg`(80KB, 含 Hatch) + `map-of-uae.dwg`(195KB) 已入库，**归属地 `packages/acad-ts-converter/test/fixtures/`**（库自持回归语料，不反向依赖 example；大图 `gaoshan`/`talahao` 故意不入库）。回归不再依赖外部 `caddata` 目录。map-of-uae 基线已回填 §6（129 实体 / 0 unmapped）。
+
+**P1 覆盖面 / 质量**
+- [x] 加最小单测（2026-10-23）：用 **vitest**（非 jest——纯 ESM 仓库里 vitest 零配置、其 Vite 解析器能吃 `lib/` 的无扩展名 import、node 环境直接验证 headless 路径）。`packages/acad-ts-converter/test/acad-ts-converter.test.ts` 覆盖三块：`read()` 端到端实体数（baseline 160/6、map-of-uae 129/0）、`registerAcadTsConverter()` 槽位 last-writer-wins、Hatch 触发 workingDatabase 的回归（未预绑定→解析成功→事后 `_workingDatabase` 恢复 null）。命令：`pnpm --filter @njbestway/acad-ts-converter test`（pretest 先 `tsc` 构建 lib，测 `../lib`）。跑绿即证明 3.6.0 下行为无回归。
+- [ ] 收敛 `unknownEntityCount`：当前 unmapped 类型（gaoshan 248 个）走计数跳过。要迭代就逐类补映射（对照 data-model 一等类），每补一类更新本文件 §6 基线。
+- [ ] 复杂线形 / SHAPE 字体、MTEXT 旋转/竖排等渲染语义——历史上 acad-rust 侧有对应修复经验，可参照移植。
+
+**P2 工程性**
+- [ ] CI：GitHub Actions 跑 `pnpm install --frozen-lockfile && pnpm build && pnpm --filter @njbestway/acad-ts-converter test && pnpm --filter cad-viewer-example build`（把 vitest 回归纳入门禁）。
+- [x] 跟进 acad-ts 新版本：2026-10-23 已按 §4 纪律升到 3.6.0 并全绿；下一版仍沿用同一门禁，别盲跳。
+- [ ] 明确 DXF 边界：本包**只做 DWG 槽**；DXF 仍由宿主内建引擎负责。若将来要接管 DXF 需另议。
+
+---
+
+## 9. 关键源码速览（`AcDbAcadTsConverter.ts`）
+
+- 类 `AcDbAcadTsConverter extends AcDbDatabaseConverter<unknown>`。
+- `read()`：`emit(PARSE START) → DwgReader.readFromStream(data) → emit(PARSE END) → this.withWorkingDatabase(db, () => this.mapToDatabase(doc, db, progress))`。
+- `mapToDatabase()`：符号表先行（LAYER/LTYPE/STYLE/BLOCK_RECORD，实体才能按名解析层/线形/样式），再 model-space 实体、块定义内容；`mapEntity()` 逐类映射，未识别类 `stats.unknownEntityCount++`。
+- 默认记录（"0" 层、ByLayer/ByBlock/Continuous、Standard 样式）data-model 已自带，重复 add 会抛——所有 `add` 都 `guardAdd` 包住（验证型转换器不应因重复默认项中断）。
+- 复杂线形：data-model 的 `AcGiLineTypePatternElement` 无 `style` 字段，但 three-renderer 的 `resolveTextStyleForElement` 会在缺 `styleObjectId` 时回退读 `element.style`（样式名）——acad-ts 路线靠这个免掉 handle→objectId 重映射。
+
+---
+
+_本文件由拆分 session 生成于迁移完成时点。改动库行为后请同步更新 §5/§6/§7。_
