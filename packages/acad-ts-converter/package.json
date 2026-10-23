@@ -41,12 +41,10 @@
     "package.json"
   ],
   "sideEffects": false,
-  "engines": {
-    "node": ">=18"
-  },
   "scripts": {
     "clean": "rimraf lib tsconfig.tsbuildinfo",
     "build": "tsc",
+    "prepublishOnly": "pnpm run build",
     "pretest": "pnpm run build",
     "test": "vitest run",
     "test:watch": "vitest"
@@ -61,6 +59,6 @@
     "vitest": "^3.2.4"
   },
   "peerDependencies": {
-    "@mlightcad/data-model": "^1.15.14"
+    "@mlightcad/data-model": "~1.15.14"
   }
 }
