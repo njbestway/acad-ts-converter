@@ -46,15 +46,19 @@
   },
   "scripts": {
     "clean": "rimraf lib tsconfig.tsbuildinfo",
-    "build": "tsc"
+    "build": "tsc",
+    "pretest": "pnpm run build",
+    "test": "vitest run",
+    "test:watch": "vitest"
   },
   "dependencies": {
-    "@node-projects/acad-ts": "link:../../../acad-ts"
+    "@node-projects/acad-ts": "3.6.0"
   },
   "devDependencies": {
     "@mlightcad/data-model": "1.15.14",
     "rimraf": "^6.0.1",
-    "typescript": "^5.9.3"
+    "typescript": "^5.9.3",
+    "vitest": "^3.2.4"
   },
   "peerDependencies": {
     "@mlightcad/data-model": "^1.15.14"
