@@ -16,6 +16,7 @@ import {
   AcDbHatch,
   AcDbHatchPatternType,
   AcDbHatchStyle,
+  acdbHostApplicationServices,
   AcDbLayerTableRecord,
   AcDbLine,
   AcDbLinetypeTableRecord,
@@ -114,7 +115,40 @@ export class AcDbAcadTsConverter extends AcDbDatabaseConverter<unknown> {
       throw error
     }
     await emit(progress, 20, 'PARSE', 'END')
+    await this.withWorkingDatabase(db, () => this.mapToDatabase(doc, db, progress))
+  }
 
+  /**
+   * Runs the mapping phase with `db` bound as the host working database and
+   * restores the previous binding afterwards. Entity construction (e.g.
+   * `AcDbHatch` resolving its effective pattern) reads
+   * `AcDbHostApplicationServices.workingDatabase`, which throws when nothing
+   * has been bound — stand-alone conversions have no viewer to set it first.
+   * The previous value is read from the backing field because the public
+   * getter throws when unset, which is the normal headless case.
+   */
+  private async withWorkingDatabase<T>(
+    db: AcDbDatabase,
+    fn: () => Promise<T>
+  ): Promise<T> {
+    const host = acdbHostApplicationServices() as unknown as {
+      workingDatabase: AcDbDatabase
+      _workingDatabase: AcDbDatabase | null
+    }
+    const previous = host._workingDatabase
+    host.workingDatabase = db
+    try {
+      return await fn()
+    } finally {
+      host._workingDatabase = previous
+    }
+  }
+
+  private async mapToDatabase(
+    doc: CadDocument,
+    db: AcDbDatabase,
+    progress: AcDbConversionProgressCallback | undefined
+  ): Promise<void> {
     // Symbol tables first so entities can resolve layer / linetype / style by name.
     await emit(progress, 24, 'LAYER', 'START')
     mapLayers(db, doc)
