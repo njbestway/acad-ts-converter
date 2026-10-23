@@ -166,7 +166,7 @@ M  pnpm-lock.yaml                                   （registry 解析）
 - [ ] 复杂线形 / SHAPE 字体、MTEXT 旋转/竖排等渲染语义——历史上 acad-rust 侧有对应修复经验，可参照移植。
 
 **P2 工程性**
-- [ ] CI：GitHub Actions 跑 `pnpm install --frozen-lockfile && pnpm build && pnpm --filter @njbestway/acad-ts-converter test && pnpm --filter cad-viewer-example build`（把 vitest 回归纳入门禁）。
+- [x] CI（2026-10-23）：`.github/workflows/ci.yml` 已落。`pnpm/action-setup@v4`（读 `packageManager` 锁 pnpm@10.33.4）+ `setup-node@v4`（`cache: pnpm`），跑 `pnpm install --frozen-lockfile` → 库 `build`(tsc) → `test`(vitest 回归) → example `build`(vue-tsc+vite) 四道门禁；Node 矩阵 `22/24`（Node 20 已过维护期），`fail-fast:false`。注：本地已验证「pnpm10 拦下 esbuild postinstall 仍构建/测试通过」——二进制来自 `@esbuild/*` optionalDependency，运行时才需要，CI 干净安装同理成立，故未加 `onlyBuiltDependencies`。
 - [x] 跟进 acad-ts 新版本：2026-10-23 已按 §4 纪律升到 3.6.0 并全绿；下一版仍沿用同一门禁，别盲跳。
 - [ ] 明确 DXF 边界：本包**只做 DWG 槽**；DXF 仍由宿主内建引擎负责。若将来要接管 DXF 需另议。
 

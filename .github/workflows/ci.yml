@@ -1,0 +1,65 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+# Read-only token is enough: this workflow builds and tests, it does not publish.
+permissions:
+  contents: read
+
+# Don't pile up runs on the same branch/PR.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-test:
+    name: build + test (Node ${{ matrix.node }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    strategy:
+      # Keep both LTS lines green independently rather than aborting the matrix
+      # the first time one Node version trips over something.
+      fail-fast: false
+      matrix:
+        # Node 20 is past maintenance as of 2026; test the two active LTS lines.
+        # package.json engines requires >=18 — widen by adding entries here.
+        node: ['22', '24']
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # Installs exactly the pnpm version pinned in package.json "packageManager"
+      # (pnpm@10.33.4). Runs before setup-node so setup-node's pnpm cache can find it.
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+
+      - name: Setup Node ${{ matrix.node }}
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+          cache: pnpm
+
+      # .npmrc pins @njbestway/@mlightcad/@node-projects to the official npm registry;
+      # --frozen-lockfile guarantees CI resolves exactly what pnpm-lock.yaml committed.
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      # --- Gate 1: library type-check + emit (tsc) ---
+      - name: Build library (@njbestway/acad-ts-converter)
+        run: pnpm --filter @njbestway/acad-ts-converter run build
+
+      # --- Gate 2: vitest regression (read() entity counts, slot override,
+      #     workingDatabase headless fix). Also re-proves the pinned acad-ts
+      #     version still maps the fixtures identically. ---
+      - name: Unit / regression tests
+        run: pnpm --filter @njbestway/acad-ts-converter run test
+
+      # --- Gate 3: example is a faithful consumer (vue-tsc type-check + vite build) ---
+      - name: Build example (cad-viewer-example)
+        run: pnpm --filter cad-viewer-example run build
